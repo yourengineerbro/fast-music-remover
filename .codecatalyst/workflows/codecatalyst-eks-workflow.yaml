@@ -1,0 +1,66 @@
+Name: codecatalyst-eks-workflow
+SchemaVersion: 1.0
+
+Triggers:
+  - Type: PUSH
+    Branches:
+      - main
+Actions:
+  BuildBackend:
+    Identifier: aws/build@v1
+    Environment:
+      Name: codecatalyst-eks-environment
+      Connections:
+        - Name: 829160849661
+          Role: codecatalyst-eks-build-role
+    Inputs:
+      Sources:
+        - WorkflowSource
+      Variables:
+        - Name: REPOSITORY_URI
+          Value: 829160849661.dkr.ecr.us-west-2.amazonaws.com/codecatalyst-eks-image-repo
+        - Name: IMAGE_TAG
+          Value: ${WorkflowSource.CommitId}
+    Configuration:
+      Steps:
+        #pre_build:
+        - Run: echo Logging in to Amazon ECR...
+        - Run: aws --version
+        - Run: aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 829160849661.dkr.ecr.us-west-2.amazonaws.com
+        #build:
+        - Run: echo Build started on `date`
+        - Run: echo Building the Docker image...
+        - Run: docker build -t $REPOSITORY_URI:latest .
+        - Run: docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+        #post_build:
+        - Run: echo Build completed on `date`
+        - Run: echo Pushing the Docker images...
+        - Run: docker push $REPOSITORY_URI:latest
+        - Run: docker push $REPOSITORY_URI:$IMAGE_TAG
+        # Replace the variables in deployment.yaml
+        - Run: find Kubernetes/ -type f | xargs sed -i "s|\$REPOSITORY_URI|$REPOSITORY_URI|g"
+        - Run: find Kubernetes/ -type f | xargs sed -i "s|\$IMAGE_TAG|$IMAGE_TAG|g"
+        - Run: cat Kubernetes/*
+        # The output artifact will be a zip file that contains Kubernetes manifest files.
+    Outputs:
+      Artifacts:
+        - Name: Manifests
+          Files: 
+            - "Kubernetes/*"
+  DeployToEKS:
+    DependsOn: 
+      - BuildBackend
+    Identifier: aws/kubernetes-deploy@v1
+    Environment:
+      Name: codecatalyst-eks-environment
+      Connections:
+        - Name: 829160849661
+          Role: codecatalyst-eks-deploy-role
+    Inputs:
+      Artifacts:
+        - Manifests
+    Configuration:
+      Namespace: default
+      Region: us-west-2
+      Cluster: codecatalyst-eks-cluster
+      Manifests: Kubernetes/
